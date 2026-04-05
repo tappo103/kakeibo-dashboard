@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>家計統合ダッシュボード</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #F8F9FA; color: #1A202C; }
+        .font-mono { font-family: 'DM Mono', monospace; }
+        .sticky-col { position: sticky; left: 0; background-color: white; z-index: 10; border-right: 2px solid #EDF2F7; }
+        .matrix-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .nav-active { background-color: #2D3748; color: white; }
+        .table-stripe tr:nth-child(even) { background-color: #F7FAFC; }
+    </style>
+</head>
+<body class="pb-20">
+
+    <header class="bg-white border-b sticky top-0 z-30 px-4 py-3 shadow-sm">
+        <div class="max-w-6xl mx-auto flex justify-between items-center">
+            <h1 class="text-lg font-bold tracking-tight">家計統合ダッシュボード</h1>
+            <div id="sync-status" class="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Data Synced</div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto p-4 space-y-6">
+
+        <div class="flex p-1 bg-gray-200 rounded-xl w-full max-w-sm mx-auto shadow-inner">
+            <button onclick="changeMode('total')" id="btn-total" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all nav-active">全体</button>
+            <button onclick="changeMode('husband')" id="btn-husband" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all text-gray-500">夫</button>
+            <button onclick="changeMode('wife')" id="btn-wife" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all text-gray-500">妻</button>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="px-5 py-4 border-b flex justify-between items-center bg-gray-50">
+                <h2 class="text-sm font-bold text-gray-700">カテゴリー別収支明細</h2>
+                <span class="text-[10px] font-bold text-gray-400 font-mono" id="view-label">VIEW: TOTAL</span>
+            </div>
+            
+            <div class="matrix-container">
+                <table class="w-full text-left border-collapse table-stripe" id="matrix-table">
+                    <thead>
+                        <tr class="bg-gray-50 border-b" id="table-header">
+                            </tr>
+                    </thead>
+                    <tbody class="text-sm" id="table-body">
+                        </tbody>
+                    <tfoot class="bg-gray-100 font-bold" id="table-footer">
+                        </tfoot>
+                </table>
+            </div>
+        </div>
+
+        <div id="loading" class="text-center py-20 text-gray-400 font-medium animate-pulse">
+            データを集計中...
+        </div>
+
+    </main>
+
+    <script>
+        const API_URL = "https://script.google.com/macros/s/AKfycbzz7p_VlsLlgbf4HtIYpL041W6v2uY_zgFlebEhR_0ApS5rmQpYoiCwNpJoB9-mxyyh/exec";
+        
+        let rawData = null;
+        let currentMode = 'total'; // total, husband, wife
+
+        // カテゴリーの並び順定義
+        const categoryOrder = ["毎変", "不変", "毎固", "不固", "収入"];
+
+        async function init() {
+            try {
+                const res = await fetch(API_URL);
+                rawData = await res.json();
+                document.getElementById('loading').classList.add('hidden');
+                render();
+            } catch (e) {
+                document.getElementById('loading').innerText = "データの取得に失敗しました。";
+            }
+        }
+
+        function changeMode(mode) {
+            currentMode = mode;
+            // UI更新
+            ['total', 'husband', 'wife'].forEach(m => {
+                const btn = document.getElementById(`btn-${m}`);
+                if (m === mode) {
+                    btn.classList.add('nav-active');
+                    btn.classList.remove('text-gray-500');
+                } else {
+                    btn.classList.remove('nav-active');
+                    btn.classList.add('text-gray-500');
+                }
+            });
+            document.getElementById('view-label').innerText = `VIEW: ${mode.toUpperCase()}`;
+            render();
+        }
+
+        function render() {
+            if (!rawData) return;
+
+            const matrix = rawData.matrix;
+            const months = [...new Set(matrix.map(d => d.month))].sort().reverse(); // 新しい月を左に
+            const categories = [...new Set(matrix.map(d => d.category))].sort((a, b) => {
+                const idxA = categoryOrder.findIndex(key => a.includes(key));
+                const idxB = categoryOrder.findIndex(key => b.includes(key));
+                return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+            });
+
+            // ヘッダー生成
+            let headerHtml = `<th class="px-4 py-3 text-xs font-bold text-gray-500 sticky-col min-w-[120px]">カテゴリー</th>`;
+            months.forEach(m => {
+                headerHtml += `<th class="px-4 py-3 text-right text-[10px] font-bold text-gray-400 font-mono uppercase">${m}</th>`;
+            });
+            document.getElementById('table-header').innerHTML = headerHtml;
+
+            // ボディ生成
+            let bodyHtml = "";
+            let monthlyTotals = {};
+
+            categories.forEach(cat => {
+                bodyHtml += `<tr class="border-b border-gray-50">
+                    <td class="px-4 py-3 font-bold text-gray-700 sticky-col text-xs">${cat}</td>`;
+                
+                months.forEach(m => {
+                    const entry = matrix.find(d => d.month === m && d.category === cat);
+                    let val = 0;
+                    if (entry) {
+                        if (currentMode === 'total') val = entry.total;
+                        else if (currentMode === 'husband') val = entry.husbandShare;
+                        else if (currentMode === 'wife') val = entry.wifeShare;
+                    }
+
+                    // 合算用
+                    monthlyTotals[m] = (monthlyTotals[m] || 0) + (cat.includes("収入") ? val : -val);
+
+                    const colorClass = cat.includes("収入") ? "text-blue-500" : "text-gray-600";
+                    bodyHtml += `<td class="px-4 py-3 text-right font-mono ${colorClass} text-sm">¥${Math.round(val).toLocaleString()}</td>`;
+                });
+                bodyHtml += `</tr>`;
+            });
+            document.getElementById('table-body').innerHTML = bodyHtml;
+
+            // フッター（収支合計）生成
+            let footerHtml = `<td class="px-4 py-4 sticky-col text-xs">月間収支</td>`;
+            months.forEach(m => {
+                const total = monthlyTotals[m] || 0;
+                const colorClass = total >= 0 ? "text-green-600" : "text-red-500";
+                footerHtml += `<td class="px-4 py-4 text-right font-mono ${colorClass} text-sm">¥${Math.round(total).toLocaleString()}</td>`;
+            });
+            document.getElementById('table-footer').innerHTML = footerHtml;
+        }
+
+        init();
+    </script>
+</body>
+</html>
